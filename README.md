@@ -81,7 +81,7 @@ deploy-pkg releases --bucket my-deploy-bucket
 deploy-pkg deploy \
   --version v1.2.0 \
   --bucket my-deploy-bucket \
-  --deploy-root /opt/myapp
+  --deploy-root /opt/myapp   # directory on the server to deploy files into
 ```
 
 Deploy will:
@@ -102,10 +102,14 @@ Re-checks every deployed file against the SBOM stored in state. Run this any tim
 ### Roll back
 
 ```bash
-deploy-pkg rollback --deploy-root /opt/myapp
+deploy-pkg rollback \
+  --deploy-root /opt/myapp \
+  --bucket my-deploy-bucket
 ```
 
-Restores the previous backup. One level of rollback is maintained.
+Pulls the previous version directly from S3 and runs the full verify → deploy pipeline.
+This guarantees the rolled-back state matches the original signed package — a local backup
+could have been tampered with between deployments.
 
 ### Check current status
 
