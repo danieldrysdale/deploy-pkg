@@ -126,7 +126,7 @@ def deploy(
     s3_client=None,
     run_deploy_script: bool = True,
 ) -> list[str]:
-    """Full deploy workflow: fetch → verify → backup → copy files → run script.
+    """Full deploy workflow: fetch -> verify -> backup -> copy files -> run script.
 
     Returns a list of verification errors. If non-empty, deploy is aborted.
     """
@@ -179,33 +179,39 @@ def deploy(
     return []
 
 
-def rollback(deploy_root: Path) -> Optional[str]:
-    """Restore the previous backup.
+def rollback(
+    deploy_root: Path,
+    bucket: str,
+    s3_client=None,
+    run_deploy_script: bool = False,
+) -> tuple[Optional[str], list[str]]:
+    """Roll back to the previous version by re-deploying it from S3.
 
-    Returns the version rolled back to, or None if no backup exists.
+    Uses the full fetch -> verify -> deploy pipeline so the rolled-back state
+    is guaranteed to match the original signed package -- not a potentially
+    compromised local backup.
+
+    Returns ``(version_rolled_back_to, errors)``. If errors is non-empty the
+    rollback was aborted. If version is None there is nothing to roll back to.
     """
-    backup = _backup_dir()
     state = _read_state()
     previous_version = state.get("previous_version")
 
-    if not backup.exists() or not any(backup.iterdir()):
-        return None
+    if not previous_version:
+        return None, []
 
-    for src in backup.rglob("*"):
-        if src.is_file():
-            rel = src.relative_to(backup)
-            dst = deploy_root / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-
-    _write_state(
-        {
-            "version": previous_version,
-            "previous_version": None,
-        }
+    errors = deploy(
+        previous_version,
+        bucket,
+        deploy_root,
+        s3_client=s3_client,
+        run_deploy_script=run_deploy_script,
     )
 
-    return previous_version
+    if errors:
+        return previous_version, errors
+
+    return previous_version, []
 
 
 def verify_deployed(deploy_root: Path) -> list[str]:
@@ -216,9 +222,8 @@ def verify_deployed(deploy_root: Path) -> list[str]:
     state = _read_state()
     sbom_data = state.get("sbom")
     if not sbom_data:
-        return ["No deployment state found — nothing to verify."]
+        return ["No deployment state found -- nothing to verify."]
 
-    import json
     sbom_json = json.dumps(sbom_data)
     records = parse_sbom(sbom_json)
     errors = []

@@ -83,13 +83,25 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def cmd_rollback(args: argparse.Namespace) -> int:
-    """Roll back to the previous deployment."""
+    """Roll back to the previous deployment via S3."""
     deploy_root = Path(args.deploy_root).resolve()
-    print(f"Rolling back deployment at {deploy_root}...")
-    version = deployer.rollback(deploy_root)
+    current = deployer.get_current_version()
+    print(f"Rolling back from {current} using s3://{args.bucket}...")
+
+    version, errors = deployer.rollback(
+        deploy_root,
+        args.bucket,
+        run_deploy_script=not args.no_script,
+    )
 
     if version is None:
-        print("ERROR: no backup found — cannot roll back.", file=sys.stderr)
+        print("ERROR: no previous version recorded — cannot roll back.", file=sys.stderr)
+        return 1
+
+    if errors:
+        print("ROLLBACK VERIFICATION FAILED — aborted:", file=sys.stderr)
+        for e in errors:
+            print(f"  {e}", file=sys.stderr)
         return 1
 
     print(f"Rolled back to: {version}")
@@ -153,8 +165,10 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--deploy-root", required=True, help="Deployment directory to verify")
 
     # rollback
-    r = sub.add_parser("rollback", help="Roll back to the previous deployment")
+    r = sub.add_parser("rollback", help="Roll back to the previous deployment via S3")
     r.add_argument("--deploy-root", required=True, help="Deployment directory to roll back")
+    r.add_argument("--bucket", required=True, help="S3 bucket name")
+    r.add_argument("--no-script", action="store_true", help="Skip running the bundled deploy script")
 
     # status
     sub.add_parser("status", help="Show currently deployed version")

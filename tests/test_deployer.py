@@ -103,13 +103,39 @@ class TestRollback:
         # Confirm v2 content is in place
         assert "v2 content" in (deploy_root / "app.py").read_text()
 
-        rolled_back = deployer.rollback(deploy_root)
-        assert rolled_back == "v1.0.0"
+        version, errors = deployer.rollback(deploy_root, BUCKET, s3_client=s3, run_deploy_script=False)
+        assert errors == []
+        assert version == "v1.0.0"
         assert "v1 content" in (deploy_root / "app.py").read_text()
 
-    def test_rollback_returns_none_with_no_backup(self, deploy_root, state_dir):
-        result = deployer.rollback(deploy_root)
-        assert result is None
+    def test_rollback_via_s3_verifies_package(self, s3, tmp_path, deploy_root, state_dir, monkeypatch):
+        files_v1 = [(tmp_path / "app.py", "app.py")]
+        files_v1[0][0].write_text("v1")
+        files_v2 = [(tmp_path / "app2.py", "app.py")]
+        files_v2[0][0].write_text("v2")
+
+        _upload(s3, "v1.0.0", files_v1)
+        _upload(s3, "v1.1.0", files_v2)
+
+        deployer.deploy("v1.0.0", BUCKET, deploy_root, s3_client=s3, run_deploy_script=False)
+        deployer.deploy("v1.1.0", BUCKET, deploy_root, s3_client=s3, run_deploy_script=False)
+
+        # Patch verify to simulate a corrupted v1.0.0 in S3
+        original_verify = deployer.verify_package
+        call_count = [0]
+        def patched_verify(package_path, sbom_json):
+            call_count[0] += 1
+            return ["HASH MISMATCH: app.py"]
+        monkeypatch.setattr(deployer, "verify_package", patched_verify)
+
+        version, errors = deployer.rollback(deploy_root, BUCKET, s3_client=s3, run_deploy_script=False)
+        assert errors != []  # rollback aborted due to verification failure
+        assert call_count[0] > 0
+
+    def test_rollback_returns_none_with_no_previous_version(self, deploy_root, state_dir, s3):
+        version, errors = deployer.rollback(deploy_root, BUCKET, s3_client=s3)
+        assert version is None
+        assert errors == []
 
 
 class TestVerifyDeployed:
@@ -140,4 +166,4 @@ class TestVerifyDeployed:
 
     def test_verify_deployed_no_state(self, deploy_root, state_dir):
         errors = deployer.verify_deployed(deploy_root)
-        assert errors == ["No deployment state found — nothing to verify."]
+        assert errors == ["No deployment state found -- nothing to verify."]
